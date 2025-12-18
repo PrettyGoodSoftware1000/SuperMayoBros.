@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>mayo bros v1</title>
+    <style>body { font-family: monospace; padding: 20px; }</style>
+</head>
+<body>
+    <pre><!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Duke Jump</title>
+  <style>
+    :root{
+      /* Duke-ish vibe: green + yellow with a red accent */
+      --duke-green:#0b7a3b;
+      --duke-yellow:#ffd200;
+      --duke-red:#d81e24;
+      --ink:#0b1b10;
+      --paper:#f7fff1;
+    }
+    html,body{height:100%; margin:0; background:linear-gradient(180deg, var(--paper), #e6f6df); color:var(--ink); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;}
+    .wrap{display:flex; flex-direction:column; align-items:center; gap:10px; padding:14px;}
+    .bar{
+      width:min(980px, 96vw);
+      display:flex; align-items:center; justify-content:space-between; gap:12px;
+      background:#ffffffcc; border:2px solid var(--duke-green); border-radius:14px; padding:10px 12px;
+      box-shadow:0 10px 26px rgba(0,0,0,.12);
+    }
+    .left{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+    .title{
+      font-weight:900; letter-spacing:.4px;
+      background:linear-gradient(90deg, var(--duke-green), #0aa94d);
+      -webkit-background-clip:text; background-clip:text; color:transparent;
+      font-size:18px;
+    }
+    .pill{padding:6px 10px; border-radius:999px; font-weight:700; font-size:13px; border:2px solid var(--duke-green); background:#fff;}
+    .pill b{color:var(--duke-green)}
+    .btn{
+      cursor:pointer; user-select:none;
+      border:0; border-radius:12px; padding:10px 12px;
+      font-weight:900;
+      background:var(--duke-yellow);
+      box-shadow:0 8px 18px rgba(0,0,0,.15);
+      outline:2px solid #0000;
+      transition:transform .06s ease, outline-color .12s ease;
+    }
+    .btn:hover{transform:translateY(-1px)}
+    .btn:active{transform:translateY(1px)}
+    .btn.alt{background:var(--duke-green); color:white}
+    .btn.red{background:var(--duke-red); color:white}
+    .hint{font-size:13px; opacity:.85}
+    canvas{
+      width:min(980px, 96vw);
+      aspect-ratio: 16 / 9;
+      image-rendering: pixelated;
+      border-radius:18px;
+      border:4px solid var(--duke-green);
+      background:#c8f2ff;
+      box-shadow:0 14px 34px rgba(0,0,0,.18);
+    }
+    .footer{width:min(980px,96vw); font-size:12px; opacity:.75; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;}
+    kbd{background:#fff; border:1px solid #ccc; border-bottom:3px solid #bbb; padding:2px 6px; border-radius:6px; font-weight:800}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar">
+    <div class="left">
+      <div class="title">DUKE JUMP</div>
+      <div class="pill">Score: <b id="score">0</b></div>
+      <div class="pill">Lives: <b id="lives">3</b></div>
+      <div class="pill">Level: <b id="level">1</b></div>
+      <div class="hint">
+        Move <kbd>←</kbd><kbd>→</kbd> / Jump <kbd>Space</kbd> / Restart <kbd>R</kbd>
+      </div>
+    </div>
+    <div class="right">
+      <button class="btn alt" id="audioBtn">Enable Audio</button>
+      <button class="btn" id="startBtn">Start</button>
+      <button class="btn red" id="resetBtn">Reset</button>
+    </div>
+  </div>
+
+  <canvas id="c" width="320" height="180" aria-label="Game canvas"></canvas>
+
+  <div class="footer">
+    <div>Tip: Land on top of sandwiches to “mayo-smash” them.</div>
+    <div>If audio is silent, click <b>Enable Audio</b> (browser policy).</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ---------------------------
+  // Canvas + pixel scaling
+  // ---------------------------
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  ctx.imageSmoothingEnabled = false;
+
+  // UI
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('lives');
+  const levelEl = document.getElementById('level');
+  const audioBtn = document.getElementById('audioBtn');
+  const startBtn = document.getElementById('startBtn');
+  const resetBtn = document.getElementById('resetBtn');
+
+  // ---------------------------
+  // Duke-ish palette
+  // ---------------------------
+  const PAL = {
+    green: '#0b7a3b',
+    green2:'#0aa94d',
+    yellow:'#ffd200',
+    red:'#d81e24',
+    ink:'#0b1b10',
+    sky:'#c8f2ff',
+    cloud:'#ffffff',
+    dirt:'#7a4a1b',
+    grass:'#1fb35b',
+    bread:'#e7c08a',
+    crust:'#b07a3a',
+    meat:'#7b2d2d',
+    cheese:'#ffdf5a',
+    mayo:'#f8fff6',
+    label:'#eaf8ff'
+  };
+
+  // ---------------------------
+  // Tiny 8-bit-ish audio engine (oscillators)
+  // + "MIDI-ish" music: sequence note numbers like MIDI.
+  // ---------------------------
+  let audio = {
+    enabled: false,
+    ctx: null,
+    master: null
+  };
+
+  function midiToFreq(n){
+    // MIDI note 69 = A4 = 440Hz
+    return 440 * Math.pow(2, (n - 69) / 12);
+  }
+
+  function ensureAudio(){
+    if (audio.ctx) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    audio.ctx = new AC();
+    audio.master = audio.ctx.createGain();
+    audio.master.gain.value = 0.22;
+    audio.master.connect(audio.ctx.destination);
+  }
+
+  function beep({type='square', freq=440, dur=0.08, gain=0.25, bend=0} = {}){
+    if (!audio.enabled) return;
+    ensureAudio();
+    const t0 = audio.ctx.currentTime;
+    const osc = audio.ctx.createOscillator();
+    const g = audio.ctx.createGain();
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    if (bend) osc.frequency.exponentialRampToValueAtTime(Math.max(30, freq + bend), t0 + dur);
+
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+
+    osc.connect(g);
+    g.connect(audio.master);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  }
+
+  // Simple drum-ish noise burst using buffer
+  function noiseHit(dur=0.06, gain=0.18){
+    if (!audio.enabled) return;
+    ensureAudio();
+    const t0 = audio.ctx.currentTime;
+    const bufferSize = Math.floor(audio.ctx.sampleRate * dur);
+    const buffer = audio.ctx.createBuffer(1, bufferSize, audio.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i=0;i<bufferSize;i++){
+      data[i] = (Math.random()*2-1) * (1 - i/bufferSize);
+    }
+    const src = audio.ctx.createBufferSource();
+    src.buffer = buffer;
+
+    const g = audio.ctx.createGain();
+    g.gain.setValueAtTime(gain, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+
+    // tiny lowpass-ish
+    const f = audio.ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(1200, t0);
+
+    src.connect(f);
+    f.connect(g);
+    g.connect(audio.master);
+    src.start(t0);
+    src.stop(t0 + dur);
+  }
+
+  // MIDI-ish music: step sequencer
+  let musicTimer = null;
+  let musicStep = 0;
+
+  const music = {
+    bpm: 132,
+    // Each step: {n: midiNote, len: steps, inst:'square'|'triangle', v: volume}
+    // Use null for rests
+    lead: [
+      76, null, 76, null, 79, null, 76, null,
+      74, null, 72, null, 74, null, null, null,
+      76, null, 76, null, 79, null, 76, null,
+      74, null, 72, null, 71, null, null, null
+    ],
+    bass: [
+      52, null, 52, null, 55, null, 52, null,
+      50, null, 48, null, 50, null, null, null,
+      52, null, 52, null, 55, null, 52, null,
+      50, null, 48, null, 47, null, null, null
+    ]
+  };
+
+  function playMusicNote(midi, type, dur, vol){
+    if (!audio.enabled || midi == null) return;
+    ensureAudio();
+    const t0 = audio.ctx.currentTime;
+    const osc = audio.ctx.createOscillator();
+    const g = audio.ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(midiToFreq(midi), t0);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g);
+    g.connect(audio.master);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  }
+
+  function startMusic(){
+    stopMusic();
+    if (!audio.enabled) return;
+    const stepDur = (60 / music.bpm) / 2; // 8th notes
+    musicStep = 0;
+    musicTimer = setInterval(() => {
+      const i = musicStep % music.lead.length;
+      playMusicNote(music.lead[i], 'square', stepDur*0.92, 0.08);
+      playMusicNote(music.bass[i], 'triangle', stepDur*0.95, 0.06);
+
+      // tiny hat
+      if (i % 2 === 0) noiseHit(0.03, 0.05);
+
+      musicStep++;
+    }, stepDur * 1000);
+  }
+
+  function stopMusic(){
+    if (musicTimer){ clearInterval(musicTimer); musicTimer = null; }
+  }
+
+  // ---------------------------
+  // Input
+  // ---------------------------
+  const keys = new Set();
+  addEventListener('keydown', (e) => {
+    if (['ArrowLeft','ArrowRight','Space','KeyR'].includes(e.code)) e.preventDefault();
+    keys.add(e.code);
+    if (e.code === 'KeyR') hardReset();
+  });
+  addEventListener('keyup', (e) => keys.delete(e.code));
+
+  // ---------------------------
+  // Game world
+  // ---------------------------
+  const W = canvas.width, H = canvas.height;
+  const GRAV = 900; // px/s^2 in "screen" pixels
+  const TILE = 16;
+
+  let running = false;
+
+  // Camera
+  const cam = { x:0, y:0 };
+
+  // State
+  const state = {
+    score: 0,
+    lives: 3,
+    level: 1,
+    time: 0,
+    win: false,
+    gameOver: false
+  };
+
+  // Level generator: simple segments
+  function buildLevel(n){
+    const platforms = [];
+    const enemies = [];
+
+    const length = 1600 + (n-1)*350;
+    const groundY = 150;
+
+    // Ground blocks
+    for (let x= -200; x < length + 200; x += TILE){
+      platforms.push({x, y: groundY, w:TILE, h:30, kind:'ground'});
+    }
+
+    // Floating platforms
+    let px = 120;
+    for (let i=0; i<22 + n*3; i++){
+      const w = (Math.random() < 0.5 ? 2 : 3) * TILE;
+      const y = 90 + (Math.random()*40|0) - (n%2 ? 8 : 0);
+      platforms.push({x:px, y, w, h:10, kind:'plat'});
+      if (Math.random() < 0.55){
+        enemies.push(makeSandwich(px + (w/2)-8, y-14));
+      }
+      px += 60 + (Math.random()*60|0);
+    }
+
+    // Goal flag
+    const goal = { x: length-80, y: groundY-44, w: 10, h: 44 };
+
+    return { length, groundY, platforms, enemies, goal };
+  }
+
+  function makeSandwich(x,y){
+    return {
+      x,y,w:16,h:12,
+      vx: (Math.random()<0.5?-1:1) * (24 + Math.random()*16),
+      vy:0,
+      alive:true,
+      squish:0
+    };
+  }
+
+  let level = buildLevel(state.level);
+
+  // Player: mayo jar
+  const player = {
+    x: 30, y: 60,
+    w: 14, h: 18,
+    vx: 0, vy: 0,
+    onGround: false,
+    invuln: 0
+  };
+
+  function resetPlayer(){
+    player.x = 30;
+    player.y = 60;
+    player.vx = 0;
+    player.vy = 0;
+    player.onGround = false;
+    player.invuln = 0;
+    cam.x = 0;
+    cam.y = 0;
+  }
+
+  function hardReset(){
+    state.score = 0;
+    state.lives = 3;
+    state.level = 1;
+    state.time = 0;
+    state.win = false;
+    state.gameOver = false;
+    level = buildLevel(state.level);
+    resetPlayer();
+    syncUI();
+    if (running) { /* keep going */ }
+    beep({freq:220, dur:0.08, gain:0.22});
+    beep({freq:330, dur:0.08, gain:0.18});
+    startMusic();
+  }
+
+  function nextLevel(){
+    state.level++;
+    level = buildLevel(state.level);
+    resetPlayer();
+    beep({freq:523.25, dur:0.07, gain:0.22});
+    beep({freq:659.25, dur:0.08, gain:0.18});
+    beep({freq:783.99, dur:0.10, gain:0.16});
+    startMusic();
+    syncUI();
+  }
+
+  function loseLife(){
+    if (player.invuln > 0) return;
+    state.lives--;
+    player.invuln = 1.2; // seconds
+    noiseHit(0.10, 0.22);
+    beep({freq:160, dur:0.14, gain:0.18, bend:-60});
+    if (state.lives <= 0){
+      state.gameOver = true;
+      running = false;
+      stopMusic();
+    } else {
+      // pop back a bit
+      player.vy = -260;
+      player.vx = -90;
+    }
+    syncUI();
+  }
+
+  function syncUI(){
+    scoreEl.textContent = state.score|0;
+    livesEl.textContent = state.lives|0;
+    levelEl.textContent = state.level|0;
+  }
+
+  // ---------------------------
+  // Collision helpers
+  // ---------------------------
+  function aabb(ax,ay,aw,ah, bx,by,bw,bh){
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+
+  function collidePlatforms(ent, platforms, dt){
+    ent.onGround = false;
+
+    // X move
+    ent.x += ent.vx * dt;
+    for (const p of platforms){
+      if (!aabb(ent.x,ent.y,ent.w,ent.h, p.x,p.y,p.w,p.h)) continue;
+      if (ent.vx > 0) ent.x = p.x - ent.w;
+      else if (ent.vx < 0) ent.x = p.x + p.w;
+      ent.vx = 0;
+    }
+
+    // Y move
+    ent.y += ent.vy * dt;
+    for (const p of platforms){
+      if (!aabb(ent.x,ent.y,ent.w,ent.h, p.x,p.y,p.w,p.h)) continue;
+      if (ent.vy > 0){
+        ent.y = p.y - ent.h;
+        ent.vy = 0;
+        ent.onGround = true;
+      } else if (ent.vy < 0){
+        ent.y = p.y + p.h;
+        ent.vy = 0;
+      }
+    }
+  }
+
+  // ---------------------------
+  // Update
+  // ---------------------------
+  function update(dt){
+    state.time += dt;
+    if (player.invuln > 0) player.invuln -= dt;
+
+    // Input -> movement
+    const left = keys.has('ArrowLeft');
+    const right = keys.has('ArrowRight');
+    const jump = keys.has('Space');
+
+    const accel = 900;
+    const maxSpeed = 140;
+    const friction = 0.85;
+
+    if (left) player.vx -= accel * dt;
+    if (right) player.vx += accel * dt;
+    if (!left && !right) player.vx *= Math.pow(friction, dt*60);
+
+    player.vx = Math.max(-maxSpeed, Math.min(maxSpeed, player.vx));
+
+    // Jump (coyote-ish)
+    if (jump && player.onGround){
+      player.vy = -330;
+      player.onGround = false;
+      beep({freq:660, dur:0.06, gain:0.16, bend:120});
+      noiseHit(0.03, 0.07);
+    }
+
+    // Gravity
+    player.vy += GRAV * dt;
+    player.vy = Math.min(player.vy, 520);
+
+    // Collide with world
+    collidePlatforms(player, level.platforms, dt);
+
+    // Enemies update
+    for (const s of level.enemies){
+      if (!s.alive) continue;
+      s.vy += GRAV * dt;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+
+      // sandwich platform collision (simpler: only ground + plats)
+      for (const p of level.platforms){
+        if (!aabb(s.x,s.y,s.w,s.h, p.x,p.y,p.w,p.h)) continue;
+        // resolve Y first to keep them on top
+        if (s.vy > 0){
+          s.y = p.y - s.h;
+          s.vy = 0;
+        } else if (s.vy < 0){
+          s.y = p.y + p.h;
+          s.vy = 0;
+        }
+      }
+
+      // bounce off boundaries
+      if (s.x < -100){ s.x = -100; s.vx = Math.abs(s.vx); }
+      if (s.x > level.length - 50){ s.x = level.length - 50; s.vx = -Math.abs(s.vx); }
+
+      if (s.squish > 0) s.squish -= dt;
+    }
+
+    // Player vs sandwiches
+    for (const s of level.enemies){
+      if (!s.alive) continue;
+      if (!aabb(player.x,player.y,player.w,player.h, s.x,s.y,s.w,s.h)) continue;
+
+      // If falling and above -> stomp
+      const playerBottom = player.y + player.h;
+      const sTop = s.y + 2;
+
+      if (player.vy > 50 && playerBottom - (player.vy*dt) <= sTop){
+        s.alive = false;
+        s.squish = 0.4;
+        player.vy = -240;
+        state.score += 100;
+        beep({freq:880, dur:0.05, gain:0.16, bend:200});
+        noiseHit(0.03, 0.09);
+        syncUI();
+      } else {
+        loseLife();
+      }
+    }
+
+    // Goal
+    const g = level.goal;
+    if (aabb(player.x,player.y,player.w,player.h, g.x,g.y,g.w,g.h)){
+      state.score += 500;
+      syncUI();
+      nextLevel();
+    }
+
+    // Camera follow
+    cam.x = Math.max(0, player.x - 70);
+    cam.x = Math.min(level.length - W, cam.x);
+
+    // Fall off
+    if (player.y > 260){
+      loseLife();
+      player.y = 40;
+      player.vy = 0;
+    }
+  }
+
+  // ---------------------------
+  // Draw (pixel art)
+  // ---------------------------
+  function draw(){
+    // Sky
+    ctx.fillStyle = PAL.sky;
+    ctx.fillRect(0,0,W,H);
+
+    // Clouds (parallax)
+    const cx = cam.x * 0.2;
+    drawCloud(40 - (cx%180), 25);
+    drawCloud(160 - (cx%240), 18);
+    drawCloud(260 - (cx%300), 34);
+
+    // Distant hills
+    ctx.fillStyle = '#88e6a8';
+    for (let i=0;i<6;i++){
+      const x = (i*120) - (cam.x*0.35 % 120);
+      ctx.beginPath();
+      ctx.arc(x, 160, 70, Math.PI, 0);
+      ctx.fill();
+    }
+
+    // Platforms
+    for (const p of level.platforms){
+      const x = Math.floor(p.x - cam.x);
+      const y = Math.floor(p.y - cam.y);
+      if (x + p.w < -40 || x > W+40) continue;
+      if (p.kind === 'ground'){
+        drawGroundBlock(x,y,p.w,p.h);
+      } else {
+        drawPlatform(x,y,p.w,p.h);
+      }
+    }
+
+    // Goal
+    drawGoal(level.goal.x - cam.x, level.goal.y);
+
+    // Sandwiches
+    for (const s of level.enemies){
+      const x = Math.floor(s.x - cam.x);
+      const y = Math.floor(s.y - cam.y);
+      if (!s.alive && s.squish <= 0) continue;
+      drawSandwich(x,y, s.alive ? 1 : Math.max(0.35, s.squish*2));
+    }
+
+    // Player (mayo jar)
+    drawJar(Math.floor(player.x - cam.x), Math.floor(player.y - cam.y), player.invuln > 0);
+
+    // HUD-ish message overlays
+    if (state.gameOver){
+      banner("GAME OVER", "Press R to reset");
+    } else if (!running){
+      banner("READY?", "Click Start (or press Start button)");
+    }
+  }
+
+  function banner(line1, line2){
+    ctx.fillStyle = '#ffffffdd';
+    ctx.fillRect(50, 62, 220, 56);
+    ctx.strokeStyle = PAL.green;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(50, 62, 220, 56);
+    ctx.fillStyle = PAL.ink;
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText(line1, 98, 88);
+    ctx.font = '12px monospace';
+    ctx.fillText(line2, 74, 108);
+  }
+
+  function drawCloud(x,y){
+    ctx.fillStyle = PAL.cloud;
+    ctx.fillRect(Math.floor(x), Math.floor(y), 34, 10);
+    ctx.fillRect(Math.floor(x+6), Math.floor(y-5), 22, 6);
+    ctx.fillRect(Math.floor(x+10), Math.floor(y+10), 18, 4);
+  }
+
+  function drawPlatform(x,y,w,h){
+    // green top, dirt underside (Duke-y)
+    ctx.fillStyle = PAL.grass;
+    ctx.fillRect(x, y, w, 4);
+    ctx.fillStyle = PAL.dirt;
+    ctx.fillRect(x, y+4, w, h-4);
+
+    // pixel specks
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    for (let i=0;i<w;i+=8){
+      ctx.fillRect(x+i+((i/8)%2?2:5), y+6, 2, 2);
+    }
+  }
+
+  function drawGroundBlock(x,y,w,h){
+    // chunkier ground
+    ctx.fillStyle = PAL.grass;
+    ctx.fillRect(x, y, w, 6);
+    ctx.fillStyle = PAL.dirt;
+    ctx.fillRect(x, y+6, w, h-6);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    for (let i=0;i<w;i+=10){
+      ctx.fillRect(x+i+3, y+10, 3, 3);
+    }
+  }
+
+  function drawSandwich(x,y, squash=1){
+    // squash scales height a bit
+    const hh = Math.max(6, Math.floor(12 * squash));
+    const yy = y + (12 - hh);
+
+    // bread top
+    ctx.fillStyle = PAL.bread;
+    ctx.fillRect(x, yy, 16, Math.floor(hh*0.45));
+    ctx.fillStyle = PAL.crust;
+    ctx.fillRect(x, yy, 16, 2);
+
+    // filling
+    ctx.fillStyle = PAL.cheese;
+    ctx.fillRect(x+2, yy+Math.floor(hh*0.45), 12, 2);
+    ctx.fillStyle = PAL.meat;
+    ctx.fillRect(x+2, yy+Math.floor(hh*0.45)+2, 12, 2);
+
+    // bread bottom
+    ctx.fillStyle = PAL.bread;
+    ctx.fillRect(x, yy+Math.floor(hh*0.75), 16, Math.floor(hh*0.25));
+    ctx.fillStyle = PAL.crust;
+    ctx.fillRect(x, yy+hh-2, 16, 2);
+
+    // tiny eyes (because why not)
+    ctx.fillStyle = PAL.ink;
+    ctx.fillRect(x+5, yy+5, 2, 2);
+    ctx.fillRect(x+10, yy+5, 2, 2);
+  }
+
+  function drawJar(x,y, blinking){
+    // body
+    ctx.fillStyle = PAL.mayo;
+    ctx.fillRect(x, y+3, 14, 14);
+
+    // lid
+    ctx.fillStyle = PAL.green;
+    ctx.fillRect(x, y, 14, 4);
+
+    // label
+    ctx.fillStyle = PAL.label;
+    ctx.fillRect(x+1, y+7, 12, 7);
+
+    // label stripe (yellow)
+    ctx.fillStyle = PAL.yellow;
+    ctx.fillRect(x+1, y+12, 12, 2);
+
+    // tiny red badge
+    ctx.fillStyle = PAL.red;
+    ctx.fillRect(x+10, y+8, 2, 2);
+
+    // face (on label)
+    ctx.fillStyle = PAL.ink;
+    if (!blinking || (Math.floor(state.time*10)%2===0)){
+      ctx.fillRect(x+5, y+9, 1, 1);
+      ctx.fillRect(x+8, y+9, 1, 1);
+    } else {
+      ctx.fillRect(x+5, y+9, 3, 1);
+    }
+    ctx.fillRect(x+6, y+11, 2, 1);
+
+    // outline
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x+0.5, y+0.5, 13, 17);
+
+    // little shine
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillRect(x+2, y+5, 2, 8);
+  }
+
+  function drawGoal(x,y){
+    // pole
+    ctx.fillStyle = PAL.green;
+    ctx.fillRect(Math.floor(x), Math.floor(y), 2, 44);
+    // flag
+    ctx.fillStyle = PAL.yellow;
+    ctx.fillRect(Math.floor(x+2), Math.floor(y+6), 18, 10);
+    ctx.fillStyle = PAL.red;
+    ctx.fillRect(Math.floor(x+2), Math.floor(y+6), 6, 10);
+    // base
+    ctx.fillStyle = PAL.dirt;
+    ctx.fillRect(Math.floor(x-3), Math.floor(y+44), 8, 6);
+  }
+
+  // ---------------------------
+  // Main loop
+  // ---------------------------
+  let last = performance.now();
+
+  function loop(now){
+    const dt = Math.min(0.033, (now - last)/1000);
+    last = now;
+
+    if (running && !state.gameOver){
+      update(dt);
+    }
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // ---------------------------
+  // Buttons
+  // ---------------------------
+  audioBtn.addEventListener('click', async () => {
+    try{
+      ensureAudio();
+      await audio.ctx.resume();
+      audio.enabled = true;
+      audioBtn.textContent = "Audio On";
+      beep({freq:523.25, dur:0.06, gain:0.18});
+      beep({freq:659.25, dur:0.06, gain:0.14});
+      startMusic();
+    }catch{
+      // Musta been a cyberfart.
+      audioBtn.textContent = "Audio Failed";
+    }
+  });
+
+  startBtn.addEventListener('click', () => {
+    if (state.gameOver) return;
+    running = true;
+    startBtn.textContent = "Running";
+    beep({freq:440, dur:0.05, gain:0.14, bend:160});
+    startMusic();
+  });
+
+  resetBtn.addEventListener('click', () => {
+    hardReset();
+    running = false;
+    startBtn.textContent = "Start";
+  });
+
+  // Init
+  syncUI();
+  resetPlayer();
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
+</pre>
+</body>
+</html>
